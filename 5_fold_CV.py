@@ -1,4 +1,3 @@
-
 import numpy as np
 import pandas as pd
 import torch
@@ -7,7 +6,7 @@ import matplotlib.pyplot as plt
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import Normalize
-from sklearn.model_selection import KFold
+from sklearn.model_selection import TimeSeriesSplit
 import numpy as np
 import pandas as pd
 import torch
@@ -24,12 +23,20 @@ if not os.path.exists('./weights'):
     os.makedirs('./weights')
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-df = pd.read_csv('./data/20240801.csv')
+df = pd.read_csv('./data/20250701.csv')
 
-df['成交额'] = df['成交额'] / 10000000
+df['amount'] = df['amount'] / 10000000
 df = df.groupby('stock_id').filter(lambda x: len(x) >= 180)  # 少于180交易日的股票不要
-df = df.groupby('stock_id').apply(lambda x: x.iloc[20:])  # 刚上市的20个交易日不要
+df = df.groupby('stock_id').apply(lambda x: x.iloc[20:], include_groups=False)  # 刚上市的20个交易日不要
 df.reset_index(drop=True, inplace=True)
+
+df['stock_id'] = df['stock_id'].astype(str)
+df = df[~df['stock_id'].str.startswith('8')]
+df = df[~df['stock_id'].str.startswith('68')]
+df = df[~df['stock_id'].str.startswith('4')]
+df['date'] = pd.to_datetime(df['date'])
+# 使用与Training.py相同的训练数据时间范围
+df = df[(df['date'] > pd.to_datetime('2010-01-01')) & (df['date'] < pd.to_datetime('2024-01-01'))]
 
 
 start_time = time.time()
@@ -65,29 +72,50 @@ train_data = train_data.astype(np.float32)
 train_label = np.array(label).astype(np.float32)
 print('训练集：',train_data.shape)
 print(train_data.shape)
+
+# 数据标准化防止数值不稳定
+from sklearn.preprocessing import StandardScaler
+
+print("开始数据标准化...")
+# 标准化训练数据
+original_shape = train_data.shape
+scaler_features = StandardScaler()
+scaler_labels = StandardScaler()
+
+# 重塑为 2D 进行标准化
+train_data_2d = train_data.reshape(-1, train_data.shape[-1])
+train_data_scaled = scaler_features.fit_transform(train_data_2d)
+train_data_scaled = train_data_scaled.reshape(original_shape)
+
+train_label_scaled = scaler_labels.fit_transform(train_label.reshape(-1, 1)).flatten()
+
+print("数据标准化完成")
+print(f"训练数据范围: [{train_data_scaled.min():.3f}, {train_data_scaled.max():.3f}]")
+print(f"训练标签范围: [{train_label_scaled.min():.3f}, {train_label_scaled.max():.3f}]")
+
 end_time = time.time()
 execution_time = end_time - start_time
 print(f"代码执行时间为: {execution_time} 秒")
 
 MODEL = r'APP'
-batch_size = 40000
-learning_rate = 0.001
-N = train_data.shape[0]
-num_epochs = 200
+batch_size = 512  # 使用和Training.py相同的batch size
+learning_rate = 0.00001  # 使用和Training.py相同的learning rate
+N = train_data_scaled.shape[0]
+num_epochs = 30  # 减少epochs以加快测试
 k = 3
-cl_splits = KFold(n_splits=k, shuffle=True, random_state=666)
+tscv = TimeSeriesSplit(n_splits=k)
 softmax_function = nn.Softmax(dim=1)
 
 L5 = []
 L5_v = []
 T_AUC = []
 
-for fold, (train_idx, test_idx) in enumerate(cl_splits.split(np.arange(N))):
-        Train_data = train_data[train_idx]
-        Train_label = train_label[train_idx]
+for fold, (train_idx, test_idx) in enumerate(tscv.split(np.arange(N))):
+        Train_data = train_data_scaled[train_idx]
+        Train_label = train_label_scaled[train_idx]
 
-        Test_data = train_data[test_idx]
-        Test_label = train_label[test_idx]
+        Test_data = train_data_scaled[test_idx]
+        Test_label = train_label_scaled[test_idx]
 
         Train_data = torch.tensor(Train_data, dtype=torch.float32)
         Train_label = torch.tensor(Train_label, dtype=torch.float32)
@@ -203,8 +231,8 @@ for fold, (train_idx, test_idx) in enumerate(cl_splits.split(np.arange(N))):
 
         model = model()
         model.to(device)
-        criterion = nn.MSELoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.98), weight_decay=1e-5)
+        criterion = nn.SmoothL1Loss()  # 使用和Training.py相同的loss函数
+        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)  # 使用和Training.py相同的optimizer
         scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
         L_train = []
         L_val = []
@@ -218,10 +246,11 @@ for fold, (train_idx, test_idx) in enumerate(cl_splits.split(np.arange(N))):
             for seq, y in tqdm(train_loader):
                 counter += 1
                 output = model(seq.to(device))
-                loss = criterion(output, y.squeeze(1).to(device))
+                loss = criterion(output.squeeze(), y.to(device))
                 train_running_loss += loss.item()
                 optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
             scheduler.step()
             TL = train_running_loss / counter
@@ -235,7 +264,7 @@ for fold, (train_idx, test_idx) in enumerate(cl_splits.split(np.arange(N))):
                 for SEQ, Z in tqdm(val_loader):
                     counter += 1
                     output = model(SEQ.to(device))
-                    loss = criterion(output, Z.squeeze(1).to(device))
+                    loss = criterion(output.squeeze(), Z.to(device))
                     current_test_loss += loss.item()
                     PREDICT.extend(output.cpu().numpy())
                     TRUE.extend(Z.cpu().numpy())

@@ -209,28 +209,11 @@ total_data_time = time.time() - data_start_time
 logger.info(f"测试数据处理完成: {test_data.shape}, 耗时: {test_process_time/60:.1f} 分钟")
 logger.info(f"测试样本数: {len(samples)}, 标签数: {len(label)}")
 logger.info(f"总数据处理时间: {total_data_time/60:.1f} 分钟")
-    
-    # 保存预处理数据以供下次使用
-    logger.info("保存预处理数据...")
-    np.savez('./processed_data.npz',
-             train_data=train_data_scaled,
-             train_label=train_label_scaled,
-             test_data=test_data_scaled,
-             test_label=test_label_scaled)
-    logger.info("预处理数据已保存到 processed_data.npz")
-
-MODEL = r'baseline'
-batch_size = 512  # 降低批大小避免内存问题
-learning_rate = 0.00001  # 降低学习率避免梯度爆炸
-N = train_data.shape[0]
-num_epochs = 50  # 增加 epoch 数量
-softmax_function = nn.Softmax(dim=1)
-
-
 
 # 数据标准化防止数值不稳定
 from sklearn.preprocessing import StandardScaler
 
+logger.info("开始数据标准化...")
 # 标准化训练数据
 original_shape = train_data.shape
 scaler_features = StandardScaler()
@@ -255,6 +238,24 @@ logger.info("数据标准化完成")
 logger.info(f"训练数据范围: [{train_data_scaled.min():.3f}, {train_data_scaled.max():.3f}]")
 logger.info(f"训练标签范围: [{train_label_scaled.min():.3f}, {train_label_scaled.max():.3f}]")
 
+# 保存预处理数据以供下次使用
+logger.info("保存预处理数据...")
+np.savez('./processed_data.npz',
+         train_data=train_data_scaled,
+         train_label=train_label_scaled,
+         test_data=test_data_scaled,
+         test_label=test_label_scaled)
+logger.info("预处理数据已保存到 processed_data.npz")
+
+MODEL = r'baseline'
+batch_size = 512  # 降低批大小避免内存问题
+learning_rate = 0.00001  # 降低学习率避免梯度爆炸
+N = train_data.shape[0]
+num_epochs = 50  # 增加 epoch 数量
+softmax_function = nn.Softmax(dim=1)
+
+
+
 Train_data = torch.tensor(train_data_scaled, dtype=torch.float32)
 Train_label = torch.tensor(train_label_scaled, dtype=torch.float32)
 
@@ -277,7 +278,7 @@ class model(nn.Module):
                  fc1_dropout=0.2,
                  fc2_dropout=0.2,
                  fc3_dropout=0.2,
-                 num_of_classes=50):
+                 num_of_classes=1):
         super(model, self).__init__()
 
         self.f_model = nn.Sequential(
@@ -409,7 +410,7 @@ for epoch in range(start_epoch, num_epochs):
     for seq, y in tqdm(train_loader, desc=f"Epoch {epoch+1} Training"):
         counter += 1
         output = model(seq.to(device))
-        loss = criterion(output, y.squeeze(1).to(device))
+        loss = criterion(output.squeeze(), y.to(device))
         
         # 检查损失值是否异常
         if torch.isnan(loss) or torch.isinf(loss):
@@ -438,7 +439,7 @@ for epoch in range(start_epoch, num_epochs):
         for SEQ, Z in tqdm(val_loader, desc=f"Epoch {epoch+1} Validation"):
             counter += 1
             output = model(SEQ.to(device))
-            loss = criterion(output, Z.squeeze(1).to(device))
+            loss = criterion(output.squeeze(), Z.to(device))
             
             # 检查损失值是否异常
             if torch.isnan(loss) or torch.isinf(loss):
