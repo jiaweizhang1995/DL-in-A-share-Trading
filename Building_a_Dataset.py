@@ -26,7 +26,7 @@ all_data = pd.DataFrame([])
 for i in tqdm(range(length), desc="Processing items"):
     data_df = ak.stock_zh_a_hist(symbol=codes_names[i], period="daily", start_date=f"{day}", end_date=end_date, adjust="hfq")  # 日度数据，后复权
     data_df['stock_id'] = codes_names[i]
-    all_data = all_data.append(data_df)
+    all_data = pd.concat([all_data, data_df], ignore_index=True)
 
 # 将数据导出为csv文件
 all_data.to_csv(os.path.join(f'./data/{end_date}.csv'), encoding='utf_8_sig')
