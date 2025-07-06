@@ -35,8 +35,8 @@ df = df[~df['stock_id'].str.startswith('68')]
 df = df[~df['stock_id'].str.startswith('4')]
 df['日期'] = pd.to_datetime(df['日期'])
 
-df_train = df[(df['日期'] > pd.to_datetime('2010-01-01')) & (df['日期'] < pd.to_datetime('2021-12-31'))]
-df_test = df[df['日期'] > pd.to_datetime('2021-12-31')]
+df_train = df[(df['日期'] > pd.to_datetime('2010-01-01')) & (df['日期'] < pd.to_datetime('2025-01-01'))]
+df_test = df[df['日期'] >= pd.to_datetime('2025-01-01')]
 
 start_time = time.time()
 grouped = df_train.groupby('stock_id')
